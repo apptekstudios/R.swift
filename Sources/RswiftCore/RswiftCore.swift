@@ -39,20 +39,14 @@ public struct RswiftCore {
       let ignoreFile = (try? IgnoreFile(ignoreFileURL: callInformation.rswiftIgnoreURL)) ?? IgnoreFile()
 
       let buildConfigurations = try xcodeproj.buildConfigurations(forTarget: callInformation.targetName)
-      let infoPlists = buildConfigurations.compactMap {
-        return loadPropertyList(name: $0.name, path: $0.infoPlistPath, callInformation: callInformation)
-      }
-      let entitlements = buildConfigurations.compactMap {
-        return loadPropertyList(name: $0.name, path: $0.entitlementsPath, callInformation: callInformation)
-      }
-
+      
       let resourceURLs = try xcodeproj.resourcePaths(forTarget: callInformation.targetName)
         .map { path in path.url(with: callInformation.urlForSourceTreeFolder) }
         .compactMap { $0 }
         .filter { !ignoreFile.matches(url: $0) }
 
       let resources = Resources(resourceURLs: resourceURLs, fileManager: FileManager.default)
-      let infoPlistWhitelist = ["UIApplicationShortcutItems", "UISceneConfigurations", "NSUserActivityTypes", "NSExtension"]
+      let infoPlistWhitelist = ["UIApplicationShortcutItems", "UIApplicationSceneManifest", "NSUserActivityTypes", "NSExtension"]
 
       var structGenerators: [StructGenerator] = []
       if callInformation.generators.contains(.image) {
@@ -86,9 +80,20 @@ public struct RswiftCore {
         structGenerators.append(AccessibilityIdentifierStructGenerator(nibs: resources.nibs, storyboards: resources.storyboards))
       }
       if callInformation.generators.contains(.info) {
+
+        let infoPlists = buildConfigurations.compactMap { config in
+          return loadPropertyList(name: config.name, url: callInformation.infoPlistFile, callInformation: callInformation)
+        }
+        
         structGenerators.append(PropertyListGenerator(name: "info", plists: infoPlists, toplevelKeysWhitelist: infoPlistWhitelist))
       }
       if callInformation.generators.contains(.entitlements) {
+        
+        let entitlements = buildConfigurations.compactMap { config -> PropertyList? in
+          guard let codeSignEntitlement = callInformation.codeSignEntitlements else { return nil }
+          return loadPropertyList(name: config.name, url: codeSignEntitlement, callInformation: callInformation)
+        }
+        
         structGenerators.append(PropertyListGenerator(name: "entitlements", plists: entitlements, toplevelKeysWhitelist: nil))
       }
 
@@ -160,10 +165,8 @@ public struct RswiftCore {
   }
 }
 
-private func loadPropertyList(name: String, path: Path?, callInformation: CallInformation) -> PropertyList? {
-  guard let path = path else { return nil }
+private func loadPropertyList(name: String, url: URL, callInformation: CallInformation) -> PropertyList? {
   do {
-    let url = path.url(with: callInformation.urlForSourceTreeFolder)
     return try PropertyList(buildConfigurationName: name, url: url)
   } catch let ResourceParsingError.parsingFailed(humanReadableError) {
     warn(humanReadableError)
